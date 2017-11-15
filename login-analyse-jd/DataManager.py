@@ -104,7 +104,7 @@ class TFRecordManager():
             num_classes = np.max(np.array(ll)) + 1
         return np.eye(num_classes, dtype=int)[np.array(ll)]
 
-    def transFormat(self, login_df, trade_df):
+    def transFormat(self, login_df, trade_df, isTrain):
         #train data: timelong,device,log_from,ip,city,result,timestamp,type,id,is_scan,is_sec,trade_ts
         one_row = np.zeros([12], dtype="int64")
         if(login_df is not None):
@@ -121,11 +121,15 @@ class TFRecordManager():
             one_row[10] = login_df["is_sec"].values[0]
             one_row[11] = self.fromDatetoTs(trade_df["time"].values[0])
         #is_risk
-        label = self.oneHot(trade_df["is_risk"].values[0], 2)
+        if(isTrain):
+            label = self.oneHot(trade_df["is_risk"].values[0], 2)
+        else:
+            #just for test, fake label
+            label = self.oneHot(0, 2)
 
         return one_row, label
 
-    def readCsvCreateTf(self, MAX_IMG_NUM = 10):
+    def readTrainCsvCreateTf(self, MAX_IMG_NUM = 10):
         print("Begin csv ---> tf")
         train_login_df = pd.read_csv('E://Projects//python//kaggle-test//login-analyse-jd//data//t_login.csv', header=0)
         train_trade_df = pd.read_csv('E://Projects//python//kaggle-test//login-analyse-jd//data/t_trade.csv', header=0)
@@ -135,16 +139,28 @@ class TFRecordManager():
         login_trade = self.concatLoginTrade(login_map, trade_map)
         print("Find {} mapping records".format(len(login_trade)))
         self.createTf(login_trade, 
-            "E://Projects//python//kaggle-test//login-analyse-jd//data//tf-train-all", MAX_RECORD_NUM)
+            "E://Projects//python//kaggle-test//login-analyse-jd//data//tf-train-all", True, MAX_RECORD_NUM)
 
-    def createTf(self, login_trade, tf_file, MAX_RECORD_NUM = 10):
+    def readTestCsvCreateTf(self, MAX_IMG_NUM = 10):
+        print("Begin csv ---> tf")
+        train_login_df = pd.read_csv('E://Projects//python//kaggle-test//login-analyse-jd//data//t_login_test.csv', header=0)
+        train_trade_df = pd.read_csv('E://Projects//python//kaggle-test//login-analyse-jd//data/t_trade_test.csv', header=0)
+        print("Login records {}, Trade records {}".format(len(train_login_df), len(train_trade_df)))
+        login_map = self.toUserMap(train_login_df, "id", sortKey = "timestamp")
+        trade_map = self.toUserMap(train_trade_df, "id")
+        login_trade = self.concatLoginTrade(login_map, trade_map)
+        print("Find {} mapping records".format(len(login_trade)))
+        self.createTf(login_trade, 
+            "E://Projects//python//kaggle-test//login-analyse-jd//data//tf-test-all", False, MAX_RECORD_NUM)
+
+    def createTf(self, login_trade, tf_file, isTrain, MAX_RECORD_NUM = 10):
         print("Begin create tf")
         writer = tf.python_io.TFRecordWriter(tf_file)
         for i in range(0, len(login_trade)):
             login_df = login_trade[i][0]
             trade_df = login_trade[i][1]
 
-            one_row, label = self.transFormat(login_df, trade_df)
+            one_row, label = self.transFormat(login_df, trade_df, isTrain)
             example = tf.train.Example(features=tf.train.Features(feature={
                     'data': self.int64_list_feature(one_row),
                     'label': self.int64_list_feature(label)}))
@@ -163,10 +179,71 @@ class TFRecordManager():
             
             datas.append(example.features.feature["data"].int64_list.value)
             labels.append(example.features.feature["label"].int64_list.value)
-            if(index >= 128):
-                break
+            #if(index >= 128):
+            #    break
             index += 1
         return np.array(datas), np.array(labels)
+
+    def read_tf_queue(self, tf_file, num_preprocess_threads = 16):
+        filename_queue = tf.train.string_input_producer([tf_file])
+        reader = tf.TFRecordReader()
+        _, serialsed_example = reader.read(filename_queue)
+        features = tf.parse_single_example(serialsed_example, features={
+                    'height': tf.FixedLenFeature([], tf.int64),
+                    'width': tf.FixedLenFeature([], tf.int64),
+                    'label_length': tf.FixedLenFeature([], tf.int64),
+                    'label_0':tf.FixedLenFeature([], tf.int64),
+                    'label_1':tf.FixedLenFeature([], tf.int64),
+                    'label_2':tf.FixedLenFeature([], tf.int64),
+                    'label_3':tf.FixedLenFeature([], tf.int64),
+                    'label_4':tf.FixedLenFeature([], tf.int64),
+                    'label_5':tf.FixedLenFeature([], tf.int64),
+                    'image_raw': tf.FixedLenFeature([], tf.string)})
+        label_info = {}
+        label_info["label_length"] = tf.cast(features['label_length'], tf.int32)
+        label_info["label_0"] = tf.cast(features['label_0'], tf.int32)
+        label_info["label_1"] = tf.cast(features['label_1'], tf.int32)
+        label_info["label_2"] = tf.cast(features['label_2'], tf.int32)
+        label_info["label_3"] = tf.cast(features['label_3'], tf.int32)
+        label_info["label_4"] = tf.cast(features['label_4'], tf.int32)
+        label_info["label_5"] = tf.cast(features['label_5'], tf.int32)
+        img = tf.decode_raw(features['image_raw'], tf.float32)
+        img = tf.reshape(img, [60, 22, 1])
+
+        #print("example info:{}".format(label_info))
+        images, label_batch = tf.train.batch(
+            [img, label_info["label_0"]],
+            batch_size=batch_size,
+            num_threads=num_preprocess_threads,
+            capacity= MAX_TRAIN_IMG_NUM + 3 * batch_size)
+
+        # Display the training images in the visualizer.
+        tf.summary.image('images', images)
+
+        return images, tf.reshape(label_batch, [batch_size])
+
+    def random_mini_batches(self, X_train, Y_train, minibatch_size):
+        minibatches = []
+        length = X_train.shape[1]
+        batch_count = length / minibatch_size
+        #print(batch_count)
+        startRandom = random.randint(0, length)
+        for i in range(int(batch_count)):
+            start = startRandom + i * minibatch_size
+            end = start + minibatch_size
+            if(start >= length):
+                start -= length
+            if(end >= length):
+                end -= length
+            if(start > end):
+                minibatches.append( (X_train[:,start:length], y_train[:,start:length]) )
+                minibatches.append( (X_train[:,:end], y_train[:,:end]) )
+                continue
+            
+            minibatch = (X_train[:,start:end], y_train[:,start:end])
+        # print(minibatch[0].shape, start, end)
+            minibatches.append(minibatch)
+        return minibatches
 
     def test_tf(self, tf_file):
         index = 0
@@ -185,5 +262,5 @@ class TFRecordManager():
 if(__name__ == "__main__"):
     print("Test Start...")
     tfManager = TFRecordManager()
-    #tfManager.readCsvCreateTf()
+    tfManager.readTestCsvCreateTf()
     #tfManager.test_tf("E://Projects//python//kaggle-test//login-analyse-jd//data//tf-train-all")

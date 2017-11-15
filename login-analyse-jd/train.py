@@ -1,6 +1,9 @@
 import tensorflow as tf
 from tensorflow.python.framework import ops
 import DataManager
+import random
+import pandas as pd
+import codecs
 
 class RiskModel():
     def __init__(self):
@@ -94,6 +97,29 @@ class RiskModel():
         ### END CODE HERE ###
         
         return cost
+
+    def random_mini_batches(self, X_train, Y_train, minibatch_size):
+        minibatches = []
+        length = X_train.shape[1]
+        batch_count = length / minibatch_size
+        #print(batch_count)
+        startRandom = random.randint(0, length)
+        for i in range(int(batch_count)):
+            start = startRandom + i * minibatch_size
+            end = start + minibatch_size
+            if(start >= length):
+                start -= length
+            if(end >= length):
+                end -= length
+            if(start > end):
+                minibatches.append( (X_train[:,start:length], Y_train[:,start:length]) )
+                minibatches.append( (X_train[:,:end], Y_train[:,:end]) )
+                continue
+            
+            minibatch = (X_train[:,start:end], Y_train[:,start:end])
+        # print(minibatch[0].shape, start, end)
+            minibatches.append(minibatch)
+        return minibatches
     
     def train(self, X_train, Y_train, X_test=None, Y_test=None, learning_rate = 0.0001,
           num_epochs = 1500, minibatch_size = 32, print_cost = True, restore_params = False):
@@ -119,7 +145,7 @@ class RiskModel():
         # Initialize all the variables
         init = tf.global_variables_initializer()
         print("Start train")
-        model_path = 'E:/Projects/python/kaggle-test/model/login-analyse-jd/model/simple.ckpt'
+        model_path = 'E://Projects//python//kaggle-test//login-analyse-jd//model//simple.ckpt'
         saver = tf.train.Saver()
         if(restore_params):
             with tf.Session() as sess:
@@ -128,6 +154,12 @@ class RiskModel():
                 print("[+] Model restored from %s" % load_path)
                 print('[+] Test accuracy is %f' % sess.run(accuracy, feed_dict={X: mnist.test.images, y_: mnist.test.labels}))
             return
+
+        # Calculate the correct predictions
+        correct_prediction = tf.equal(tf.argmax(Z4), tf.argmax(Y))
+
+        # Calculate accuracy on the test set
+        accuracy = tf.reduce_mean(tf.cast(correct_prediction, "float"))
         # Start the session to compute the tensorflow graph
         with tf.Session() as sess:
             
@@ -139,9 +171,7 @@ class RiskModel():
 
                 epoch_cost = 0.                       # Defines a cost related to an epoch
                 num_minibatches = int(m / minibatch_size) # number of minibatches of size minibatch_size in the train set
-                seed = seed + 1
-                '''minibatches = (X_train, y_train)
-                minibatches = random_mini_batches(X_train, Y_train, minibatch_size, seed)
+                minibatches = self.random_mini_batches(X_train, Y_train, minibatch_size)
 
                 for minibatch in minibatches:
 
@@ -149,33 +179,98 @@ class RiskModel():
                     (minibatch_X, minibatch_Y) = minibatch
                     _ , minibatch_cost = sess.run([optimizer, cost], feed_dict={X: minibatch_X, Y: minibatch_Y})
                     
-                    epoch_cost += minibatch_cost / num_minibatches'''
-                _ , epoch_cost = sess.run([optimizer, cost], feed_dict={X: X_train, Y: Y_train})
+                    epoch_cost += minibatch_cost / num_minibatches
+                #_ , epoch_cost = sess.run([optimizer, cost], feed_dict={X: X_train, Y: Y_train})
                 # Print the cost every epoch
+                print ("Cost after epoch %i: %f" % (epoch, epoch_cost))
+                print ("Train Accuracy:", accuracy.eval({X: X_train, Y: Y_train}))
                 if print_cost == True and epoch % 100 == 0:
                     print ("Cost after epoch %i: %f" % (epoch, epoch_cost))
                 if print_cost == True and epoch % 5 == 0:
                     costs.append(epoch_cost)
-
-            # lets save the parameters in a variable
-            parameters = sess.run(parameters)
-            print ("Parameters have been trained!")
-            #save_path = saver.save(sess, model_path)
-            #print("[+] Model saved in file: %s" % save_path)
-
-            # Calculate the correct predictions
-            correct_prediction = tf.equal(tf.argmax(Z4), tf.argmax(Y))
-
-            # Calculate accuracy on the test set
-            accuracy = tf.reduce_mean(tf.cast(correct_prediction, "float"))
+                    # lets save the parameters in a variable
+                    #parameters = sess.run(parameters)
+                    #print ("Parameters have been trained!")
+                    save_path = saver.save(sess, model_path)
+                    print("[+] Model saved in file: %s" % save_path)
+            # # lets save the parameters in a variable
+            # parameters = sess.run(parameters)
+            # print ("Parameters have been trained!")
+            # save_path = saver.save(sess, model_path)
+            # print("[+] Model saved in file: %s" % save_path)
 
             print ("Train Accuracy:", accuracy.eval({X: X_train, Y: Y_train}))
             #print ("Test Accuracy:", accuracy.eval({X: X_test, Y: Y_test}))
             
             return parameters
-if __name__ == "__main__":
+
+    def predict(self, X_test):
+        # ops.reset_default_graph()                         # to be able to rerun the model without overwriting tf variables
+        # tf.set_random_seed(1)                             # to keep consistent results
+        # seed = 3                                          # to keep consistent results
+        # (m, n_x) = X_test.shape                          # (n_x: input size, m : number of examples in the train set)
+        # n_y = 2                            # n_y : output size
+        # costs = []                                        # To keep track of the cost
+        # X_test = X_test.T
+
+        # X, Y = self.create_placeholders(n_x, n_y)
+
+        # parameters = self.initialize_parameters()
+
+        # Z3 = self.forward_propagation(X, parameters)
+
+        ops.reset_default_graph()                         # to be able to rerun the model without overwriting tf variables
+        tf.set_random_seed(1)                             # to keep consistent results
+        seed = 3                                          # to keep consistent results
+        (m, n_x) = X_test.shape
+        n_y = 2
+        costs = []
+        X_test = X_test.T
+        #Y_train = Y_train.T
+        X, Y = self.create_placeholders(n_x, n_y)
+
+        parameters = self.initialize_parameters()
+
+        Z4 = self.forward_propagation(X, parameters)
+        
+        cost = self.compute_cost(Z4, Y)
+        
+        # Initialize all the variables
+        init = tf.global_variables_initializer()
+        print("Start predict")
+        model_path = 'E:\Projects\python\kaggle-test\login-analyse-jd\model\simple.ckpt'
+        saver = tf.train.Saver()
+        accuracy = tf.argmax(Z4)
+        with tf.Session() as sess:
+        # 读取之前训练好的数据
+            load_path = saver.restore(sess, model_path)
+            print("[+] Model restored from %s" % load_path)
+            #print('[+] Test accuracy is %f' % sess.run(accuracy, feed_dict={X: X_test}))
+            result = sess.run(accuracy, feed_dict={X: X_test})
+            print(result[:30])
+            return result
+
+def do_predict():
+    tfRecordManager = DataManager.TFRecordManager()
+    datas, labels = tfRecordManager.readTf_simple("E://Projects//python//kaggle-test//login-analyse-jd//data//tf-test-all")
+    print("Shape Data {}".format(datas.shape))
+    riskModel = RiskModel()
+    results = riskModel.predict(datas)
+    print("{}".format(results))
+    test_trade_df = pd.read_csv('E://Projects//python//kaggle-test//login-analyse-jd//data/t_trade_test.csv', header=0)
+    with codecs.open('E://Projects//python//kaggle-test//login-analyse-jd//data/my_result.csv','w',"utf-8") as file:
+        #file.write("PassengerId,Survived\n")
+        for i in range(len(results)):
+            line = str(test_trade_df["rowkey"][i]) + "," + str(results[i])
+            file.write(line)
+            file.write('\n')
+
+def do_train():
     tfRecordManager = DataManager.TFRecordManager()
     datas, labels = tfRecordManager.readTf_simple("E://Projects//python//kaggle-test//login-analyse-jd//data//tf-train-all")
     print("Shape Data {}, labels {}".format(datas.shape, labels.shape))
     riskModel = RiskModel()
     riskModel.train(datas, labels)
+
+if __name__ == "__main__":
+    do_predict()
